@@ -1,0 +1,5 @@
+# Development and CI tooling only.
+# INVENTER has no third-party runtime dependencies.
+pytest>=8.0
+pytest-cov>=5.0
+ruff>=0.6

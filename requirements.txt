@@ -1,0 +1,2 @@
+# INVENTER runs on the Python standard library only.
+# Required modules: tkinter (ttk), sqlite3, threading, concurrent.futures.

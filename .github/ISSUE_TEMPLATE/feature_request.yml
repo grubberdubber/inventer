@@ -1,0 +1,47 @@
+name: Feature request
+description: Propón una mejora o nueva capacidad para INVENTER.
+title: "feat: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problema u oportunidad
+      description: ¿Qué necesidad operativa resolvería esta funcionalidad?
+      placeholder: "Necesito consolidar stock de varias sucursales..."
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Propuesta
+      description: Describe la solución que imaginas.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternativas consideradas
+    validations:
+      required: false
+  - type: dropdown
+    id: area
+    attributes:
+      label: Área
+      options:
+        - UI / experiencia
+        - Inventario / dominio
+        - Persistencia / SQLite
+        - Concurrencia / workers
+        - Escáner / POS
+        - Documentación
+        - CI / tooling
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checklist
+      options:
+        - label: Busqué issues existentes y no encontré una propuesta similar.
+          required: true

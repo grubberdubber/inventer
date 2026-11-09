@@ -1,0 +1,53 @@
+stages:
+  - quality
+  - test
+
+default:
+  image: python:3.12-slim
+  before_script:
+    - python -m pip install --upgrade pip
+    - python -m pip install -r requirements-dev.txt
+
+variables:
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PYTHONDONTWRITEBYTECODE: "1"
+
+ruff:
+  stage: quality
+  script:
+    - ruff check .
+  cache:
+    key:
+      files:
+        - requirements-dev.txt
+    paths:
+      - .cache/pip
+
+pytest:
+  stage: test
+  script:
+    - python -m pytest -q tests/test_core.py
+  cache:
+    key:
+      files:
+        - requirements-dev.txt
+    paths:
+      - .cache/pip
+
+ui-smoke:
+  stage: test
+  image: debian:bookworm-slim
+  before_script:
+    - apt-get update
+    - apt-get install -y --no-install-recommends python3 python3-pip python3-tk python3-venv xvfb
+    - python3 -m venv /tmp/inventer-venv
+    - /tmp/inventer-venv/bin/python -m pip install --upgrade pip
+    - /tmp/inventer-venv/bin/python -m pip install -r requirements-dev.txt
+  script:
+    - xvfb-run -a /tmp/inventer-venv/bin/python -m pytest -q tests/test_ui.py
+  cache:
+    key:
+      files:
+        - requirements-dev.txt
+    paths:
+      - .cache/pip

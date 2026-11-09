@@ -1,0 +1,74 @@
+name: Bug report
+description: Reporta un comportamiento incorrecto o una regresión.
+title: "fix: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Gracias por reportar un problema. Antes de continuar, verifica que no exista un issue similar.
+        Para vulnerabilidades, usa el proceso de SECURITY.md y **no** abras un issue público.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Resumen
+      description: Describe el problema en una o dos frases.
+      placeholder: "Al registrar una salida, el stock queda desincronizado..."
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Pasos para reproducir
+      description: Secuencia exacta de acciones.
+      placeholder: |
+        1. Abrir Inventario
+        2. Seleccionar CAR-002
+        3. Registrar salida de 1 unidad
+        4. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Comportamiento esperado
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Comportamiento actual
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Versión de INVENTER
+      placeholder: "1.0.0"
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Entorno
+      description: Sistema operativo, versión de Python y Tk.
+      placeholder: "Ubuntu 24.04 · Python 3.12.4 · Tk 8.6"
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs o capturas
+      description: Adjunta `var/log/inventer.log` o capturas si aplica.
+      render: shell
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checklist
+      options:
+        - label: Busqué issues existentes y no encontré un duplicado.
+          required: true
+        - label: No estoy reportando una vulnerabilidad de seguridad.
+          required: true

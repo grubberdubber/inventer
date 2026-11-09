@@ -1,0 +1,54 @@
+{
+  "palette": {
+    "bg": "#080D12",
+    "surface": "#0E161F",
+    "surface_alt": "#131F2A",
+    "surface_high": "#1A2936",
+    "border": "#223341",
+    "border_soft": "#182531",
+    "sidebar": "#0A1118",
+    "sidebar_active": "#142430",
+    "text": "#E9F2F9",
+    "text_dim": "#9CB0C0",
+    "text_faint": "#637A8C",
+    "accent": "#37E5A5",
+    "accent_hover": "#5CF0BA",
+    "accent_dim": "#10382D",
+    "info": "#4CC9F0",
+    "info_dim": "#10303D",
+    "warning": "#F2B84B",
+    "warning_dim": "#3A2D12",
+    "danger": "#F04438",
+    "danger_hover": "#FF7062",
+    "danger_dim": "#341714",
+    "tree_alt": "#0C141C",
+    "shadow": "#05090D"
+  },
+  "fonts": {
+    "sans": ["Inter", "Segoe UI", "Ubuntu", "Cantarell", "DejaVu Sans", "Helvetica"],
+    "mono": ["JetBrains Mono", "IBM Plex Mono", "Consolas", "DejaVu Sans Mono", "Courier New"],
+    "sizes": {
+      "micro": 8,
+      "caption": 9,
+      "body": 10,
+      "subtitle": 11,
+      "title": 13,
+      "heading": 18,
+      "display": 26
+    }
+  },
+  "layout": {
+    "sidebar_width": 236,
+    "topbar_height": 74,
+    "statusbar_height": 28,
+    "gutter": 14,
+    "card_pad": 16,
+    "tree_row_height": 34
+  },
+  "window": {
+    "title": "INVENTER — Núcleo de Inventario",
+    "geometry": "1360x740",
+    "min_width": 1240,
+    "min_height": 700
+  }
+}

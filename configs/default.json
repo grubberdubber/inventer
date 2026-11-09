@@ -1,0 +1,22 @@
+{
+  "app_name": "INVENTER",
+  "version": "1.0.0",
+  "database": {
+    "path": "var/inventer.db",
+    "journal_mode": "WAL"
+  },
+  "logging": {
+    "path": "var/log/inventer.log",
+    "level": "INFO"
+  },
+  "inventory": {
+    "low_stock_factor": 1.5,
+    "currency": "$",
+    "units": ["Unidad", "Kg", "Litro", "Paquete"]
+  },
+  "ui": {
+    "toast_ms": 2800,
+    "search_debounce_ms": 260,
+    "worker_threads": 4
+  }
+}
