@@ -4,7 +4,7 @@
 
 <p align="center">
   <a href="https://github.com/grubberdubber/inventer/actions/workflows/ci.yml"><img alt="GitHub Actions" src="https://github.com/grubberdubber/inventer/actions/workflows/ci.yml/badge.svg"></a>
-  <a href="https://gitlab.com/grubberdubber/inventer/-/pipelines"><img alt="GitLab CI" src="https://gitlab.com/grubberdubber/inventer/badges/main/pipeline.svg"></a>
+  <a href="https://gitlab.com/grubberdubber/inventer/-/pipelines"><img alt="GitLab CI" src="https://img.shields.io/badge/GitLab%20CI-configured-4CC9F0?logo=gitlab&logoColor=white"></a>
   <img alt="Python" src="https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white">
   <img alt="Tkinter" src="https://img.shields.io/badge/UI-Tkinter%20%2F%20ttk-1F6FEB">
   <img alt="SQLite" src="https://img.shields.io/badge/persistence-SQLite%20WAL-003B57?logo=sqlite&logoColor=white">
