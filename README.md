@@ -9,6 +9,7 @@
   <img alt="Tkinter" src="https://img.shields.io/badge/UI-Tkinter%20%2F%20ttk-1F6FEB">
   <img alt="SQLite" src="https://img.shields.io/badge/persistence-SQLite%20WAL-003B57?logo=sqlite&logoColor=white">
   <img alt="License" src="https://img.shields.io/badge/license-MIT-37E5A5">
+  <img alt="Release" src="https://img.shields.io/github/v/release/grubberdubber/inventer?display_name=tag&sort=semver">
   <img alt="PRs" src="https://img.shields.io/badge/PRs-welcome-4CC9F0">
 </p>
 
