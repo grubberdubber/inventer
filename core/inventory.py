@@ -117,6 +117,9 @@ class DashboardStats:
     total_skus: int
     total_units: int
     inventory_value: float
+    inventory_cost: float
+    potential_margin: float
+    margin_pct: float
     critical_count: int
     out_of_stock: int
     low_count: int
@@ -124,6 +127,19 @@ class DashboardStats:
     health_pct: float
     coverage_pct: float
     categories: tuple[CategoryHealth, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ImportResult:
+    """Summary of an atomic CSV catalog import."""
+
+    created: int
+    updated: int
+
+    @property
+    def total(self) -> int:
+        """Return the number of processed rows."""
+        return self.created + self.updated
 
 
 def _as_text(payload: Mapping[str, Any], key: str) -> str:
@@ -293,6 +309,11 @@ def build_dashboard(
     total_skus = len(products)
     total_units = sum(product.stock for product in products)
     inventory_value = sum(product.stock * product.price for product in products)
+    inventory_cost = sum(product.stock * product.cost for product in products)
+    potential_margin = inventory_value - inventory_cost
+    margin_pct = (
+        potential_margin / inventory_value * 100.0 if inventory_value else 0.0
+    )
 
     statuses = {
         product.id: classify_stock(product.stock, product.min_stock, low_stock_factor)
@@ -343,6 +364,9 @@ def build_dashboard(
         total_skus=total_skus,
         total_units=total_units,
         inventory_value=inventory_value,
+        inventory_cost=inventory_cost,
+        potential_margin=potential_margin,
+        margin_pct=margin_pct,
         critical_count=critical_count,
         out_of_stock=out_of_stock,
         low_count=low_count,

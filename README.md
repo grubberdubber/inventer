@@ -45,7 +45,8 @@ El sistema está diseñado para responder aunque la base de datos crezca: las co
 | **Panel de control** | KPIs de SKU, unidades, valorización, alertas, salud por categoría y actividad reciente. |
 | **Inventario** | Catálogo maestro con búsqueda instantánea, filtros por categoría/alertas, edición y exportación CSV. |
 | **Alertas de stock** | Cola priorizada por severidad (`AGOTADO → CRÍTICO → BAJO`) con cantidad sugerida de reposición. |
-| **Movimientos** | Bitácora inmutable de entradas y salidas con filtros y exportación para auditoría. |
+| **Movimientos** | Bitácora inmutable de entradas y salidas con filtros por tipo, fecha y texto, además de exportación para auditoría. |
+| **Sistema** | Centro de mantenimiento con respaldos SQLite, importación atómica de catálogo CSV y diagnóstico del núcleo. |
 | **Escáner** | Simulación de lector EAN-13 con búsqueda por código y acciones rápidas de venta/reposición. |
 | **Reposición masiva** | Ingreso de todos los productos en alerta dentro de una sola transacción atómica. |
 | **Validación** | SKU, EAN, cantidades, precios y coherencia de umbrales validados antes de tocar la base. |
@@ -74,6 +75,7 @@ El sistema está diseñado para responder aunque la base de datos crezca: las co
 ```text
 inventer/
 ├── core/
+│   ├── csv_io.py        # Parser CSV tolerante para importación atómica de catálogo
 │   ├── database.py      # Repositorio SQLite thread-local + transacciones atómicas
 │   ├── inventory.py     # Modelos inmutables, validación, umbrales y telemetría
 │   └── logger.py        # Logging rotativo a var/log/inventer.log
@@ -199,7 +201,9 @@ La paleta, tipografía y layout se ajustan en [`configs/theme.json`](configs/the
 | `Ctrl + N` | Nuevo producto. |
 | `Ctrl + F` | Enfocar búsqueda global. |
 | `Ctrl + E` | Exportar la vista actual a CSV. |
-| `Doble clic` | Editar producto / reponer alerta. |
+| `Ctrl + I` | Importar el catálogo desde CSV. |
+| `Ctrl + B` | Crear un respaldo SQLite. |
+| `Doble clic` / `Enter` | Editar producto, reponer alerta o ejecutar la acción de la fila. |
 | `Esc` | Cerrar el modal activo. |
 
 ---
@@ -220,8 +224,9 @@ La suite cubre:
 - Validación y normalización de productos (SKU, EAN, importes, umbrales).
 - Clasificación de stock, orden por severidad y cálculo de reposición.
 - Agregación de telemetría y salud por categoría.
-- Persistencia: seed, unicidad, ajustes atómicos, reposición masiva y rollback.
-- Smoke test de la shell Tkinter (se omite automáticamente sin display).
+- Persistencia: seed, unicidad, ajustes atómicos, reposición masiva, importación CSV y rollback.
+- Respaldos SQLite consistentes y legibles por una conexión independiente.
+- Smoke test de la shell Tkinter, filtros de fecha y exportación (se omite sin display).
 
 ### Lint
 
