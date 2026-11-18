@@ -795,6 +795,7 @@ class DataTable(tk.Frame):
         self._row_clip = tk.Frame(self, bg=theme.c("surface"), height=2)
 
         self.tree.bind("<Double-1>", self._handle_double_click)
+        self.tree.bind("<Return>", self._handle_return)
         self.tree.bind("<<TreeviewSelect>>", self._handle_select)
         self.tree.bind("<Configure>", self._position_row_clip, add="+")
 
@@ -829,6 +830,13 @@ class DataTable(tk.Frame):
         if row and self._on_activate:
             self.tree.selection_set(row)
             self._on_activate(row)
+
+    def _handle_return(self, _event: tk.Event) -> str:
+        """Activate the selected row from the keyboard."""
+        row = self.selected_id()
+        if row and self._on_activate:
+            self._on_activate(row)
+        return "break"
 
     def _handle_select(self, _event: tk.Event) -> None:
         if self._on_select:

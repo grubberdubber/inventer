@@ -13,15 +13,18 @@ import logging
 import tkinter as tk
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
-from datetime import datetime
+from datetime import datetime, timedelta
+from pathlib import Path
 from tkinter import filedialog, ttk
 from typing import Any
 
+from core.csv_io import parse_inventory_csv
 from core.database import Database
 from core.inventory import (
     DashboardStats,
     Movement,
     Product,
+    ValidationError,
     build_dashboard,
     classify_stock,
     reorder_quantity,
@@ -258,7 +261,10 @@ class DashboardView(tk.Frame):
         )
         self.kpi_value.set(
             format_money(stats.inventory_value, currency),
-            "Valorizado a precio de venta",
+            (
+                f"Margen {stats.margin_pct:.0f}% · "
+                f"costo {format_money(stats.inventory_cost, currency)}"
+            ),
         )
         self.kpi_alerts.set(
             format_units(stats.alert_count),
@@ -931,6 +937,10 @@ class MovementsView(tk.Frame):
     ALL = "Todos los movimientos"
     INCOMING = "Entradas"
     OUTGOING = "Salidas"
+    ALL_TIME = "Toda la historia"
+    TODAY = "Hoy"
+    LAST_WEEK = "Últimos 7 días"
+    LAST_MONTH = "Últimos 30 días"
 
     def __init__(self, master: tk.Misc, app: MainWindow) -> None:
         super().__init__(master, bg=app.theme.c("bg"))
@@ -938,6 +948,7 @@ class MovementsView(tk.Frame):
         self.theme = app.theme
         theme = app.theme
         self.kind_var = tk.StringVar(value=self.ALL)
+        self.range_var = tk.StringVar(value=self.ALL_TIME)
 
         toolbar = tk.Frame(self, bg=theme.c("bg"))
         toolbar.pack(fill="x", pady=(0, 14))
@@ -952,6 +963,19 @@ class MovementsView(tk.Frame):
         )
         self.kind_combo.pack(side="left")
         self.kind_combo.bind(
+            "<<ComboboxSelected>>", lambda _event: app.apply_movement_filter()
+        )
+
+        self.range_combo = ttk.Combobox(
+            toolbar,
+            textvariable=self.range_var,
+            values=(self.ALL_TIME, self.TODAY, self.LAST_WEEK, self.LAST_MONTH),
+            state="readonly",
+            style="Dark.TCombobox",
+            width=17,
+        )
+        self.range_combo.pack(side="left", padx=(8, 0))
+        self.range_combo.bind(
             "<<ComboboxSelected>>", lambda _event: app.apply_movement_filter()
         )
 
@@ -1068,10 +1092,251 @@ class MovementsView(tk.Frame):
         )
 
     def clear_filters(self) -> None:
-        """Reset the movement type and global search query."""
+        """Reset movement type, date range and global search query."""
         self.kind_var.set(self.ALL)
+        self.range_var.set(self.ALL_TIME)
         self.app.search_box.set_text("")
         self.app.apply_movement_filter()
+
+
+class SystemView(tk.Frame):
+    """Maintenance center for backups, imports, exports and shortcuts."""
+
+    def __init__(self, master: tk.Misc, app: MainWindow) -> None:
+        super().__init__(master, bg=app.theme.c("bg"))
+        self.app = app
+        self.theme = app.theme
+        theme = app.theme
+
+        self.grid_columnconfigure(0, weight=3, uniform="system")
+        self.grid_columnconfigure(1, weight=2, uniform="system")
+        self.grid_rowconfigure(0, weight=1)
+
+        maintenance = Card(self, theme, padding=18)
+        maintenance.grid(row=0, column=0, sticky="nsew", padx=(0, 7))
+        body = maintenance.body
+
+        heading = _panel_heading(
+            body,
+            theme,
+            kicker="CENTRO DE DATOS",
+            kicker_color=theme.c("info"),
+            title="Mantenimiento operativo",
+        )
+        heading.pack(fill="x")
+        pill(
+            heading,
+            theme,
+            "SQLITE WAL",
+            fg=theme.c("accent"),
+            bg=theme.c("accent_dim"),
+        ).pack(side="right")
+
+        tk.Label(
+            body,
+            text=(
+                "El respaldo usa la API nativa de SQLite y no detiene la operación. "
+                "La importación valida todo el archivo y se aplica en una sola "
+                "transacción: si una fila falla, no se modifica ningún producto."
+            ),
+            bg=theme.c("surface"),
+            fg=theme.c("text_dim"),
+            font=theme.font("caption"),
+            justify="left",
+            anchor="w",
+            wraplength=500,
+        ).pack(fill="x", pady=(10, 18))
+
+        actions = tk.Frame(body, bg=theme.c("surface"))
+        actions.pack(fill="x")
+        actions.grid_columnconfigure(0, weight=1)
+        actions.grid_columnconfigure(1, weight=1)
+        buttons = (
+            ("CREAR RESPALDO", app.backup_database, "primary"),
+            ("IMPORTAR CSV", app.import_inventory_csv, "outline"),
+            ("EXPORTAR INVENTARIO", app.export_inventory_csv, "ghost"),
+            ("EXPORTAR MOVIMIENTOS", app.export_movements_csv, "ghost"),
+        )
+        for index, (text, command, variant) in enumerate(buttons):
+            button = ActionButton(
+                actions,
+                theme,
+                text,
+                command,
+                variant=variant,
+                compact=True,
+            )
+            button.grid(
+                row=index // 2,
+                column=index % 2,
+                sticky="ew",
+                padx=(0, 8) if index % 2 == 0 else (8, 0),
+                pady=(0, 8),
+            )
+
+        tk.Frame(body, bg=theme.c("border_soft"), height=1).pack(fill="x", pady=(12, 14))
+
+        tk.Label(
+            body,
+            text="ÚLTIMO RESPALDO",
+            bg=theme.c("surface"),
+            fg=theme.c("text_faint"),
+            font=theme.font("micro", "bold"),
+            anchor="w",
+        ).pack(fill="x")
+        self.backup_label = tk.Label(
+            body,
+            text="Sin respaldos creados en esta sesión",
+            bg=theme.c("surface"),
+            fg=theme.c("text_dim"),
+            font=theme.font("caption"),
+            justify="left",
+            anchor="w",
+            wraplength=500,
+        )
+        self.backup_label.pack(fill="x", pady=(3, 0))
+
+        tk.Label(
+            body,
+            text="COLUMNAS DEL CSV",
+            bg=theme.c("surface"),
+            fg=theme.c("text_faint"),
+            font=theme.font("micro", "bold"),
+            anchor="w",
+        ).pack(fill="x", pady=(18, 4))
+        tk.Label(
+            body,
+            text=(
+                "SKU · Código de barras · Producto · Categoría · Stock · Mínimo · "
+                "Máximo · Precio · Costo. Unidad y Proveedor son opcionales. La "
+                "columna Código de barras es obligatoria."
+            ),
+            bg=theme.c("surface"),
+            fg=theme.c("text_faint"),
+            font=theme.font("micro"),
+            justify="left",
+            anchor="w",
+            wraplength=500,
+        ).pack(fill="x")
+
+        right = tk.Frame(self, bg=theme.c("bg"))
+        right.grid(row=0, column=1, sticky="nsew", padx=(7, 0))
+        right.grid_columnconfigure(0, weight=1)
+        right.grid_rowconfigure(0, weight=1)
+        right.grid_rowconfigure(1, weight=1)
+
+        state_card = Card(right, theme, padding=18)
+        state_card.grid(row=0, column=0, sticky="nsew", pady=(0, 14))
+        state_body = state_card.body
+        _panel_heading(
+            state_body,
+            theme,
+            kicker="DIAGNÓSTICO",
+            kicker_color=theme.c("accent"),
+            title="Estado del núcleo",
+        ).pack(fill="x")
+        self._row(state_body, "CATÁLOGO", "—", "catalog")
+        self._row(state_body, "UNIDADES", "—", "units")
+        self._row(state_body, "ALERTAS", "—", "alerts")
+        self._row(state_body, "VALOR", "—", "value")
+        self._row(state_body, "COSTO", "—", "cost")
+        self._row(state_body, "MARGEN", "—", "margin")
+        tk.Frame(state_body, bg=theme.c("border_soft"), height=1).pack(fill="x", pady=(8, 6))
+        self._row(state_body, "VERSIÓN", app.version, "version")
+        self._row(state_body, "MOTOR", f"{app.workers} workers · SQLite WAL", "engine")
+        self._row(state_body, "ÚLTIMA CARGA", "—", "sync")
+
+        shortcuts_card = Card(right, theme, padding=18)
+        shortcuts_card.grid(row=1, column=0, sticky="nsew")
+        shortcuts_body = shortcuts_card.body
+        _panel_heading(
+            shortcuts_body,
+            theme,
+            kicker="PRODUCTIVIDAD",
+            kicker_color=theme.c("info"),
+            title="Atajos de teclado",
+        ).pack(fill="x")
+        shortcuts = (
+            ("F5", "Actualizar datos"),
+            ("Ctrl+N", "Nuevo producto"),
+            ("Ctrl+F", "Enfocar búsqueda"),
+            ("Ctrl+E", "Exportar vista actual"),
+            ("Ctrl+I", "Importar inventario CSV"),
+            ("Ctrl+B", "Crear respaldo SQLite"),
+        )
+        for key, description in shortcuts:
+            row = tk.Frame(shortcuts_body, bg=theme.c("surface"))
+            row.pack(fill="x", pady=2)
+            tk.Label(
+                row,
+                text=key,
+                bg=theme.c("surface_alt"),
+                fg=theme.c("text"),
+                font=theme.font("micro", "bold", mono=True),
+                padx=6,
+                pady=2,
+                width=7,
+                anchor="w",
+            ).pack(side="left")
+            tk.Label(
+                row,
+                text=description,
+                bg=theme.c("surface"),
+                fg=theme.c("text_dim"),
+                font=theme.font("caption"),
+                anchor="w",
+            ).pack(side="left", padx=(8, 0))
+
+    def _row(
+        self,
+        parent: tk.Misc,
+        label: str,
+        value: str,
+        attribute: str,
+    ) -> None:
+        """Add a diagnostic row and store its value label."""
+        theme = self.theme
+        row = tk.Frame(parent, bg=theme.c("surface"))
+        row.pack(fill="x", pady=3)
+        tk.Label(
+            row,
+            text=label,
+            bg=theme.c("surface"),
+            fg=theme.c("text_faint"),
+            font=theme.font("micro", "bold"),
+            width=15,
+            anchor="w",
+        ).pack(side="left")
+        value_label = tk.Label(
+            row,
+            text=value,
+            bg=theme.c("surface"),
+            fg=theme.c("text"),
+            font=theme.font("micro", "bold", mono=True),
+            anchor="e",
+        )
+        value_label.pack(side="right")
+        setattr(self, f"{attribute}_label", value_label)
+
+    def set_snapshot(self, stats: DashboardStats, last_sync: datetime) -> None:
+        """Refresh catalog and financial telemetry in the diagnostic panel."""
+        currency = self.app.currency
+        self.catalog_label.configure(text=f"{stats.total_skus} SKU")
+        self.units_label.configure(text=format_units(stats.total_units))
+        self.alerts_label.configure(
+            text=format_units(stats.alert_count),
+            fg=self.theme.c("danger") if stats.alert_count else self.theme.c("accent"),
+        )
+        self.value_label.configure(text=format_money(stats.inventory_value, currency))
+        self.cost_label.configure(text=format_money(stats.inventory_cost, currency))
+        self.margin_label.configure(
+            text=f"{stats.margin_pct:.0f}% · {format_money(stats.potential_margin, currency)}"
+        )
+        self.sync_label.configure(text=last_sync.strftime("%H:%M:%S"))
+
+    def set_backup(self, path: Path) -> None:
+        """Show the most recent backup destination."""
+        self.backup_label.configure(text=str(path))
 
 
 class MainWindow:
@@ -1263,6 +1528,7 @@ class MainWindow:
             ("inventory", "▤", "Inventario"),
             ("movements", "⇅", "Movimientos"),
             ("alerts", "⚠", "Alertas de stock"),
+            ("system", "⚙", "Sistema"),
         )
         for key, icon, label in navigation:
             button = NavButton(
@@ -1484,11 +1750,13 @@ class MainWindow:
         self.inventory_view = InventoryView(self.content, self)
         self.movements_view = MovementsView(self.content, self)
         self.alerts_view = AlertsView(self.content, self)
+        self.system_view = SystemView(self.content, self)
         self.views: dict[str, tk.Frame] = {
             "dashboard": self.dashboard_view,
             "inventory": self.inventory_view,
             "movements": self.movements_view,
             "alerts": self.alerts_view,
+            "system": self.system_view,
         }
         for view in self.views.values():
             view.grid(row=0, column=0, sticky="nsew", padx=18, pady=16)
@@ -1522,6 +1790,10 @@ class MainWindow:
                 "Alertas de stock",
                 "Cola de reposición priorizada por severidad",
             ),
+            "system": (
+                "Sistema",
+                "Respaldos, importación CSV y estado del núcleo",
+            ),
         }
         title, subtitle = titles.get(key, ("INVENTER", ""))
         self.view_title.configure(text=title)
@@ -1546,6 +1818,8 @@ class MainWindow:
         self.root.bind("<Control-n>", self._shortcut_new)
         self.root.bind("<Control-f>", self._shortcut_search)
         self.root.bind("<Control-e>", self._shortcut_export)
+        self.root.bind("<Control-i>", self._shortcut_import)
+        self.root.bind("<Control-b>", self._shortcut_backup)
 
     def _shortcut_refresh(self, _event: tk.Event) -> str:
         self.refresh_data()
@@ -1569,6 +1843,14 @@ class MainWindow:
             self.toasts.show(
                 "La exportación está disponible en Inventario y Movimientos.", "info"
             )
+        return "break"
+
+    def _shortcut_import(self, _event: tk.Event) -> str:
+        self.import_inventory_csv()
+        return "break"
+
+    def _shortcut_backup(self, _event: tk.Event) -> str:
+        self.backup_database()
         return "break"
 
     def _on_search_change(self, _query: str) -> None:
@@ -1613,7 +1895,7 @@ class MainWindow:
             products = self.db.list_products()
             stats = build_dashboard(products, self.alert_factor)
             categories = sorted({product.category for product in products}, key=str.casefold)
-            movements = self.db.list_movements(limit=200)
+            movements = self.db.list_movements(limit=500)
             return products, stats, categories, movements
 
         self._run_async(task, self._on_data_loaded, self._on_data_error)
@@ -1644,7 +1926,9 @@ class MainWindow:
         self.apply_movement_filter()
         self.alerts_view.set_data(stats, self._alerts)
         self.nav_buttons["alerts"].set_badge(stats.alert_count)
-        self.status_sync.configure(text=f"ÚLTIMA CARGA {datetime.now():%H:%M:%S}")
+        loaded_at = datetime.now()
+        self.status_sync.configure(text=f"ÚLTIMA CARGA {loaded_at:%H:%M:%S}")
+        self.system_view.set_snapshot(stats, loaded_at)
         self._set_status("idle")
         self._set_sidebar_status("SISTEMA EN LÍNEA", "ok")
 
@@ -1696,8 +1980,20 @@ class MainWindow:
         """Filter the cached audit log and repaint the movements grid."""
         query = self.search_box.get_text().strip().casefold()
         kind = self.movements_view.kind_var.get()
+        range_key = self.movements_view.range_var.get()
+        now = datetime.now()
+        cutoff: datetime | None = None
+        if range_key == MovementsView.TODAY:
+            cutoff = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        elif range_key == MovementsView.LAST_WEEK:
+            cutoff = now - timedelta(days=7)
+        elif range_key == MovementsView.LAST_MONTH:
+            cutoff = now - timedelta(days=30)
+
         filtered: list[Movement] = []
         for movement in self._movements_cache:
+            if cutoff is not None and movement.created_at < cutoff:
+                continue
             if kind == MovementsView.INCOMING and movement.kind != "IN":
                 continue
             if kind == MovementsView.OUTGOING and movement.kind != "OUT":
@@ -1910,6 +2206,95 @@ class MainWindow:
             f"{len(items)} productos reabastecidos",
         )
 
+    def import_inventory_csv(self) -> None:
+        """Import or update the catalog from a CSV file after confirmation."""
+        path = filedialog.askopenfilename(
+            parent=self.root,
+            title="Importar inventario desde CSV",
+            filetypes=[("Archivo CSV", "*.csv"), ("Todos los archivos", "*.*")],
+        )
+        if not path:
+            return
+
+        try:
+            records = parse_inventory_csv(path)
+        except (OSError, ValidationError) as exc:
+            logger.error("Inventory import parse failed: %s", exc)
+            self.toasts.show(f"No se pudo leer el CSV: {exc}", "danger", 5200)
+            return
+
+        known_skus = {product.sku for product in self._products_cache}
+        created = sum(
+            1
+            for record in records
+            if str(record.get("sku", "")).strip().upper() not in known_skus
+        )
+        updated = len(records) - created
+        dialog = ConfirmDialog(
+            self.root,
+            self.theme,
+            title="Importar inventario",
+            subtitle=f"ARCHIVO · {Path(path).name}",
+            message=(
+                "Los productos se emparejan por SKU. Los existentes se actualizan y "
+                "su stock se ajusta con el movimiento de auditoría correspondiente; "
+                "los SKU nuevos se crean con su stock inicial. Si una sola fila falla, "
+                "no se aplicará ningún cambio."
+            ),
+            metrics=(
+                ("FILAS", format_units(len(records)), self.theme.c("text")),
+                ("NUEVOS", format_units(created), self.theme.c("accent")),
+                ("ACTUALIZADOS", format_units(updated), self.theme.c("info")),
+            ),
+            confirm_text="IMPORTAR CSV",
+            hint="OPERACIÓN ATÓMICA · REVISA EL ARCHIVO ANTES DE CONTINUAR",
+        )
+        if not dialog.show():
+            return
+
+        self._mutate(
+            lambda: self.db.import_products(records),
+            f"Inventario importado · {len(records)} filas procesadas",
+        )
+
+    def backup_database(self) -> None:
+        """Create a consistent SQLite backup without blocking the Tk loop."""
+        path = filedialog.asksaveasfilename(
+            parent=self.root,
+            title="Crear respaldo de la base de datos",
+            defaultextension=".db",
+            initialfile=f"inventer_backup_{datetime.now():%Y%m%d_%H%M}.db",
+            filetypes=[("Base SQLite", "*.db"), ("Todos los archivos", "*.*")],
+        )
+        if not path:
+            return
+
+        backup_path = Path(path)
+        self._set_status("working")
+        self._set_sidebar_status("CREANDO RESPALDO…", "info")
+
+        def done(result: Path) -> None:
+            self._set_status("idle")
+            self._set_sidebar_status("SISTEMA EN LÍNEA", "ok")
+            self.system_view.set_backup(result)
+            self.toasts.show(
+                f"Respaldo creado · {result.name}",
+                "success",
+                self.toast_ms,
+            )
+
+        def failed(error: Exception) -> None:
+            logger.error(
+                "Database backup failed: %s",
+                error,
+                exc_info=(type(error), error, error.__traceback__),
+            )
+            self._set_status("error")
+            self._set_sidebar_status("RESPALDO FALLIDO", "error")
+            self.toasts.show(f"No se pudo crear el respaldo: {error}", "danger", 5200)
+
+        self._run_async(lambda: self.db.backup_to(backup_path), done, failed)
+
     def _write_csv(
         self,
         path: str,
@@ -1945,6 +2330,7 @@ class MainWindow:
             rows.append(
                 (
                     product.sku,
+                    product.barcode,
                     product.name,
                     product.category,
                     product.unit,
@@ -1964,6 +2350,7 @@ class MainWindow:
                 path,
                 (
                     "SKU",
+                    "Código de barras",
                     "Producto",
                     "Categoría",
                     "Unidad",

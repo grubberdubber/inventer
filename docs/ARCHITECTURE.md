@@ -16,13 +16,13 @@ Este documento describe las decisiones de diseño, el modelo de concurrencia y l
 ┌─────────────────────────────────────────────────────────────┐
 │ ui/                                                         │
 │ MainWindow · DashboardView · InventoryView · AlertsView     │
-│ MovementsView · ProductDialog · RestockDialog · SaleDialog  │
+│ MovementsView · SystemView · ProductDialog · SaleDialog     │
 └──────────────────────────────┬──────────────────────────────┘
                                │ snapshots inmutables / comandos
 ┌──────────────────────────────▼──────────────────────────────┐
-│ core/inventory.py                                           │
-│ Product · ProductDraft · Movement · StockStatus             │
-│ validate_product · classify_stock · build_dashboard         │
+│ core/inventory.py · core/csv_io.py                          │
+│ Product · ProductDraft · Movement · ImportResult             │
+│ validate_product · build_dashboard · parse_inventory_csv     │
 └──────────────────────────────┬──────────────────────────────┘
                                │ ProductDraft / deltas
 ┌──────────────────────────────▼──────────────────────────────┐
@@ -40,11 +40,12 @@ Este documento describe las decisiones de diseño, el modelo de concurrencia y l
 
 No conoce SQLite ni Tkinter. Define:
 
-- **Modelos inmutables** (`frozen=True, slots=True`): `Product`, `ProductDraft`, `Movement`, `CategoryHealth`, `DashboardStats`.
+- **Modelos inmutables** (`frozen=True, slots=True`): `Product`, `ProductDraft`, `Movement`, `CategoryHealth`, `DashboardStats`, `ImportResult`.
 - **Validación** (`validate_product`): normaliza textos, parsea enteros/decimales y aplica reglas de negocio.
 - **Clasificación** (`classify_stock`): `OUT → CRITICAL → LOW → OK`.
 - **Reposición** (`reorder_quantity`): objetivo acotado por `max_stock`.
-- **Telemetría** (`build_dashboard`): agregados por categoría, cobertura y salud.
+- **Telemetría** (`build_dashboard`): agregados por categoría, cobertura, salud, costo y margen potencial.
+- **CSV** (`parse_inventory_csv`): normaliza encabezados y entrega payloads canónicos sin tocar la base.
 
 ### `core/database.py`
 
@@ -56,7 +57,7 @@ PRAGMA journal_mode = WAL;
 PRAGMA synchronous = NORMAL;
 ```
 
-Las escrituras usan `BEGIN IMMEDIATE` para adquirir el lock de escritura antes de leer y mutar, evitando carreras entre workers. El contexto `_transaction()` hace `COMMIT` en éxito y `ROLLBACK` ante cualquier excepción.
+Las escrituras usan `BEGIN IMMEDIATE` para adquirir el lock de escritura antes de leer y mutar, evitando carreras entre workers. El contexto `_transaction()` hace `COMMIT` en éxito y `ROLLBACK` ante cualquier excepción. `import_products()` valida todas las filas y reutiliza la misma transacción para el lote completo; `backup_to()` usa la API nativa `sqlite3.Connection.backup` para obtener una copia consistente.
 
 ### `ui/`
 
@@ -121,10 +122,12 @@ Tk mainloop
 
 1. El usuario confirma un modal.
 2. `MainWindow._mutate()` envía la operación al executor.
-3. `Database.save_product()` / `adjust_stock()` / `bulk_replenish()` valida y abre una transacción.
+3. `Database.save_product()` / `adjust_stock()` / `bulk_replenish()` / `import_products()` valida y abre una transacción.
 4. Se actualiza `products` y se inserta el `movement` correspondiente.
 5. Si algo falla, `ROLLBACK` revierte ambos cambios.
 6. La UI recibe el resultado, muestra un toast y solicita un refresco completo.
+
+Los respaldos se ejecutan en un worker y usan una copia consistente de SQLite; no bloquean el hilo de Tk ni interrumpen las lecturas WAL.
 
 ## 6. Decisiones y trade-offs
 
@@ -152,6 +155,6 @@ Tk mainloop
 
 ## 9. Testing
 
-- `tests/test_core.py`: dominio y persistencia con bases temporales.
-- `tests/test_ui.py`: smoke test de la shell Tkinter; se omite sin display.
+- `tests/test_core.py`: dominio, persistencia, importación CSV y respaldos con bases temporales.
+- `tests/test_ui.py`: smoke test de la shell Tkinter, filtros de fecha y exportación; se omite sin display.
 - CI ejecuta Ruff y pytest en matriz de Python; el job de UI usa Xvfb.

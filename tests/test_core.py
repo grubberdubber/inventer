@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 
+from core.csv_io import parse_inventory_csv
 from core.database import Database
 from core.inventory import (
     Product,
@@ -190,6 +191,9 @@ def test_build_dashboard_aggregates_telemetry() -> None:
     assert stats.total_skus == 4
     assert stats.total_units == 42
     assert stats.inventory_value == pytest.approx(122.0)
+    assert stats.inventory_cost == pytest.approx(21.0)
+    assert stats.potential_margin == pytest.approx(101.0)
+    assert stats.margin_pct == pytest.approx(82.7869, rel=1e-3)
     assert stats.out_of_stock == 1
     assert stats.critical_count == 1
     assert stats.low_count == 1
@@ -300,6 +304,139 @@ def test_adjust_stock_rejects_zero_quantity(db: Database) -> None:
 
     with pytest.raises(ValidationError, match="distinta de cero"):
         db.adjust_stock(product.id, 0, "No-op")
+
+
+def test_parse_inventory_csv_accepts_export_headers(tmp_path: Path) -> None:
+    source = tmp_path / "catalogo.csv"
+    source.write_text(
+        "SKU,Código de barras,Producto,Categoría,Unidad,Stock,Mínimo,Máximo,"
+        "Precio,Costo,Proveedor\n"
+        "TST-010,7501234567890,Producto CSV,Pruebas,Unidad,7,3,20,2.50,1.20,Proveedor\n",
+        encoding="utf-8-sig",
+    )
+
+    records = parse_inventory_csv(source)
+
+    assert records == [
+        {
+            "sku": "TST-010",
+            "barcode": "7501234567890",
+            "name": "Producto CSV",
+            "category": "Pruebas",
+            "unit": "Unidad",
+            "stock": "7",
+            "min_stock": "3",
+            "max_stock": "20",
+            "price": "2.50",
+            "cost": "1.20",
+            "supplier": "Proveedor",
+            "_row": 2,
+        }
+    ]
+
+
+def test_parse_inventory_csv_requires_barcode(tmp_path: Path) -> None:
+    source = tmp_path / "invalido.csv"
+    source.write_text(
+        "SKU,Producto,Categoría,Stock,Mínimo,Máximo,Precio,Costo\n"
+        "TST-010,Producto CSV,Pruebas,7,3,20,2.50,1.20\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValidationError, match="barcode"):
+        parse_inventory_csv(source)
+
+
+def test_import_products_creates_and_updates(db: Database) -> None:
+    result = db.import_products(
+        [
+            {
+                "sku": "TST-010",
+                "barcode": "7501234567890",
+                "name": "Producto CSV",
+                "category": "Pruebas",
+                "unit": "Unidad",
+                "stock": "7",
+                "min_stock": "3",
+                "max_stock": "20",
+                "price": "2.50",
+                "cost": "1.20",
+                "supplier": "Proveedor",
+            },
+            {
+                "sku": "LAC-001",
+                "barcode": "7501000110012",
+                "name": "Leche Entera 1L",
+                "category": "Lácteos",
+                "unit": "Unidad",
+                "stock": "50",
+                "min_stock": "24",
+                "max_stock": "120",
+                "price": "1.35",
+                "cost": "1.05",
+                "supplier": "Lácteos del Valle",
+            },
+        ]
+    )
+
+    assert result.created == 1
+    assert result.updated == 1
+    assert result.total == 2
+    assert db.get_by_barcode("7501234567890") is not None
+    updated = next(product for product in db.list_products() if product.sku == "LAC-001")
+    assert updated.stock == 50
+    assert db.list_movements(limit=2)[0].note == "Ajuste por importación CSV"
+
+
+def test_import_products_rolls_back_invalid_batch(db: Database) -> None:
+    before = len(db.list_products())
+
+    with pytest.raises(ValidationError, match="Fila 3"):
+        db.import_products(
+            [
+                {
+                    "sku": "TST-011",
+                    "barcode": "7501234567891",
+                    "name": "Producto válido",
+                    "category": "Pruebas",
+                    "unit": "Unidad",
+                    "stock": "4",
+                    "min_stock": "2",
+                    "max_stock": "10",
+                    "price": "1.00",
+                    "cost": "0.50",
+                    "supplier": "Proveedor",
+                },
+                {
+                    "sku": "TST-012",
+                    "barcode": "1234",
+                    "name": "Producto inválido",
+                    "category": "Pruebas",
+                    "unit": "Unidad",
+                    "stock": "4",
+                    "min_stock": "2",
+                    "max_stock": "10",
+                    "price": "1.00",
+                    "cost": "0.50",
+                    "supplier": "Proveedor",
+                },
+            ]
+        )
+
+    assert len(db.list_products()) == before
+    assert db.get_by_barcode("7501234567891") is None
+
+
+def test_backup_creates_independent_database(db: Database, tmp_path: Path) -> None:
+    backup_path = db.backup_to(tmp_path / "backup" / "inventer.db")
+
+    assert backup_path.exists()
+    copy = Database(backup_path)
+    try:
+        assert len(copy.list_products()) == 28
+        assert len(copy.list_movements(limit=20)) == 10
+    finally:
+        copy.close()
 
 
 def test_bulk_replenish_is_atomic(db: Database) -> None:

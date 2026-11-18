@@ -17,8 +17,10 @@ from pathlib import Path
 from typing import Any
 
 from .inventory import (
+    ImportResult,
     Movement,
     Product,
+    ProductDraft,
     ValidationError,
     validate_product,
 )
@@ -273,6 +275,97 @@ class Database:
 
     # -------------------------------------------------------------- mutations
 
+    def _persist_product(
+        self,
+        tx: sqlite3.Connection,
+        draft: ProductDraft,
+        now: str,
+        *,
+        movement_note: str = "Ajuste desde edición de producto",
+    ) -> tuple[int, bool]:
+        """Insert or update one validated draft inside an open transaction.
+
+        Returns:
+            ``(product_id, created)`` where ``created`` is ``True`` for inserts.
+        """
+        if draft.product_id is None:
+            cursor = tx.execute(
+                """
+                INSERT INTO products (
+                    sku, barcode, name, category, unit, stock, min_stock,
+                    max_stock, price, cost, supplier, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    draft.sku,
+                    draft.barcode,
+                    draft.name,
+                    draft.category,
+                    draft.unit,
+                    draft.stock,
+                    draft.min_stock,
+                    draft.max_stock,
+                    draft.price,
+                    draft.cost,
+                    draft.supplier,
+                    now,
+                ),
+            )
+            product_id = int(cursor.lastrowid)
+            if draft.stock > 0:
+                tx.execute(
+                    """
+                    INSERT INTO movements (product_id, kind, quantity, note, created_at)
+                    VALUES (?, 'IN', ?, 'Stock inicial de catálogo', ?)
+                    """,
+                    (product_id, draft.stock, now),
+                )
+            logger.info("Product created sku=%s id=%s", draft.sku, product_id)
+            return product_id, True
+
+        previous = tx.execute(
+            "SELECT stock FROM products WHERE id = ?",
+            (draft.product_id,),
+        ).fetchone()
+        if previous is None:
+            raise ValidationError("El producto ya no existe en el catálogo.")
+
+        tx.execute(
+            """
+            UPDATE products
+            SET sku = ?, barcode = ?, name = ?, category = ?, unit = ?,
+                stock = ?, min_stock = ?, max_stock = ?, price = ?,
+                cost = ?, supplier = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                draft.sku,
+                draft.barcode,
+                draft.name,
+                draft.category,
+                draft.unit,
+                draft.stock,
+                draft.min_stock,
+                draft.max_stock,
+                draft.price,
+                draft.cost,
+                draft.supplier,
+                now,
+                draft.product_id,
+            ),
+        )
+        delta = draft.stock - int(previous["stock"])
+        if delta:
+            tx.execute(
+                """
+                INSERT INTO movements (product_id, kind, quantity, note, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (draft.product_id, "IN" if delta > 0 else "OUT", abs(delta), movement_note, now),
+            )
+        logger.info("Product updated sku=%s id=%s", draft.sku, draft.product_id)
+        return draft.product_id, False
+
     def save_product(self, payload: Mapping[str, Any]) -> Product:
         """Insert or update a product after strict validation.
 
@@ -290,82 +383,7 @@ class Database:
 
         with self._transaction() as tx:
             try:
-                if draft.product_id is None:
-                    cursor = tx.execute(
-                        """
-                        INSERT INTO products (
-                            sku, barcode, name, category, unit, stock, min_stock,
-                            max_stock, price, cost, supplier, updated_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        (
-                            draft.sku,
-                            draft.barcode,
-                            draft.name,
-                            draft.category,
-                            draft.unit,
-                            draft.stock,
-                            draft.min_stock,
-                            draft.max_stock,
-                            draft.price,
-                            draft.cost,
-                            draft.supplier,
-                            now,
-                        ),
-                    )
-                    product_id = int(cursor.lastrowid)
-                    if draft.stock > 0:
-                        tx.execute(
-                            """
-                            INSERT INTO movements (product_id, kind, quantity, note, created_at)
-                            VALUES (?, 'IN', ?, 'Stock inicial de catálogo', ?)
-                            """,
-                            (product_id, draft.stock, now),
-                        )
-                    logger.info("Product created sku=%s id=%s", draft.sku, product_id)
-                else:
-                    previous = tx.execute(
-                        "SELECT stock FROM products WHERE id = ?",
-                        (draft.product_id,),
-                    ).fetchone()
-                    if previous is None:
-                        raise ValidationError("El producto ya no existe en el catálogo.")
-
-                    tx.execute(
-                        """
-                        UPDATE products
-                        SET sku = ?, barcode = ?, name = ?, category = ?, unit = ?,
-                            stock = ?, min_stock = ?, max_stock = ?, price = ?,
-                            cost = ?, supplier = ?, updated_at = ?
-                        WHERE id = ?
-                        """,
-                        (
-                            draft.sku,
-                            draft.barcode,
-                            draft.name,
-                            draft.category,
-                            draft.unit,
-                            draft.stock,
-                            draft.min_stock,
-                            draft.max_stock,
-                            draft.price,
-                            draft.cost,
-                            draft.supplier,
-                            now,
-                            draft.product_id,
-                        ),
-                    )
-                    product_id = draft.product_id
-                    delta = draft.stock - int(previous["stock"])
-                    if delta:
-                        tx.execute(
-                            """
-                            INSERT INTO movements (product_id, kind, quantity, note, created_at)
-                            VALUES (?, ?, ?, 'Ajuste desde edición de producto', ?)
-                            """,
-                            (product_id, "IN" if delta > 0 else "OUT", abs(delta), now),
-                        )
-                    logger.info("Product updated sku=%s id=%s", draft.sku, product_id)
+                product_id, _created = self._persist_product(tx, draft, now)
             except sqlite3.IntegrityError as exc:
                 message = str(exc).lower()
                 if "barcode" in message:
@@ -378,6 +396,133 @@ class Database:
         if product is None:
             raise ValidationError("No se pudo recuperar el producto guardado.")
         return product
+
+    def import_products(self, records: Sequence[Mapping[str, Any]]) -> ImportResult:
+        """Create or update a catalog from parsed CSV records atomically.
+
+        Rows are matched by normalized SKU. The whole file is validated before
+        the first write; any invalid row rolls the complete batch back.
+
+        Args:
+            records: Parsed rows with canonical inventory field names.
+
+        Returns:
+            Counts of created and updated products.
+
+        Raises:
+            ValidationError: If the file is empty, duplicated or contains an
+                invalid payload at any row.
+        """
+        if not records:
+            raise ValidationError("El archivo CSV no contiene filas para importar.")
+
+        now = datetime.now().isoformat(timespec="seconds")
+        created = 0
+        updated = 0
+
+        with self._transaction() as tx:
+            current_rows = tx.execute("SELECT * FROM products").fetchall()
+            existing_by_sku = {
+                product.sku: product for product in map(_row_to_product, current_rows)
+            }
+            barcode_owner = {
+                product.barcode: product.sku for product in existing_by_sku.values()
+            }
+            seen_skus: set[str] = set()
+            seen_barcodes: set[str] = set()
+            drafts: list[ProductDraft] = []
+
+            for line_number, record in enumerate(records, start=2):
+                payload = dict(record)
+                payload.pop("_row", None)
+                raw_sku = str(payload.get("sku", "")).strip().upper()
+                existing = existing_by_sku.get(raw_sku)
+                if existing is not None:
+                    payload["product_id"] = existing.id
+
+                try:
+                    draft = validate_product(payload)
+                except ValidationError as exc:
+                    raise ValidationError(f"Fila {line_number}: {exc}") from exc
+
+                if draft.sku in seen_skus:
+                    raise ValidationError(
+                        f"Fila {line_number}: el SKU {draft.sku} está duplicado en el archivo."
+                    )
+                if draft.barcode in seen_barcodes:
+                    raise ValidationError(
+                        f"Fila {line_number}: el código de barras {draft.barcode} "
+                        "está duplicado en el archivo."
+                    )
+                owner = barcode_owner.get(draft.barcode)
+                if owner is not None and owner != draft.sku:
+                    raise ValidationError(
+                        f"Fila {line_number}: el código de barras {draft.barcode} "
+                        f"ya pertenece al SKU {owner}."
+                    )
+
+                seen_skus.add(draft.sku)
+                seen_barcodes.add(draft.barcode)
+                drafts.append(draft)
+                if existing is None:
+                    created += 1
+                else:
+                    updated += 1
+
+            try:
+                for draft in drafts:
+                    self._persist_product(
+                        tx,
+                        draft,
+                        now,
+                        movement_note="Ajuste por importación CSV",
+                    )
+            except sqlite3.IntegrityError as exc:
+                message = str(exc).lower()
+                if "barcode" in message:
+                    raise ValidationError(
+                        "Uno de los códigos de barras ya está registrado."
+                    ) from exc
+                if "sku" in message:
+                    raise ValidationError("Uno de los SKU ya está registrado.") from exc
+                raise ValidationError(
+                    "Conflicto de integridad al importar el catálogo."
+                ) from exc
+
+        logger.info(
+            "Catalog imported created=%d updated=%d",
+            created,
+            updated,
+        )
+        return ImportResult(created=created, updated=updated)
+
+    def backup_to(self, destination: Path) -> Path:
+        """Write a consistent copy of the live SQLite database.
+
+        Args:
+            destination: Target path for the backup file.
+
+        Returns:
+            The resolved backup path.
+
+        Raises:
+            ValidationError: If the source and destination are the same file.
+        """
+        target_path = Path(destination)
+        if target_path.resolve() == self.path.resolve():
+            raise ValidationError("El respaldo debe guardarse en un archivo distinto.")
+
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        source = self._connection()
+        target = sqlite3.connect(target_path)
+        try:
+            with target:
+                source.backup(target)
+        finally:
+            target.close()
+
+        logger.info("Database backup written path=%s", target_path)
+        return target_path
 
     def adjust_stock(self, product_id: int, delta: int, note: str) -> Product:
         """Atomically adjust stock and record the matching movement.
